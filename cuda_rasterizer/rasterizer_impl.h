@@ -14,6 +14,7 @@
 #include <iostream>
 #include <vector>
 #include "rasterizer.h"
+#include "deformation.h"
 #include <cuda_runtime_api.h>
 
 namespace CudaRasterizer
@@ -39,6 +40,7 @@ namespace CudaRasterizer
 		float* rgb;
 		uint32_t* point_offsets;
 		uint32_t* tiles_touched;
+		Coeffs* pchip_coeffs;
 
 		static GeometryState fromChunk(char*& chunk, size_t P);
 	};

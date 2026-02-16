@@ -17,11 +17,13 @@
 #include "device_launch_parameters.h"
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
+#include "deformation.h"
 
 namespace FORWARD
 {
 	// Perform initial steps for each Gaussian prior to rasterization.
 	void preprocess(int P, int D, int M,
+		const float* inter_points, // inter_points,  # N x C x 2
 		const float* orig_points,
 		const glm::vec2* scales,
 		const float scale_modifier,
@@ -38,6 +40,7 @@ namespace FORWARD
 		const float focal_x, float focal_y,
 		const float tan_fovx, float tan_fovy,
 		int* radii,
+		Coeffs* pchip_coeffs,
 		float2* points_xy_image,
 		float* depths,
 		// float* isovals,
@@ -56,6 +59,7 @@ namespace FORWARD
 		const uint32_t* point_list,
 		int W, int H,
 		float focal_x, float focal_y,
+		const Coeffs* pchip_coeffs,
 		const float2* points_xy_image,
 		const float* features,
 		const float* transMats,
@@ -65,7 +69,8 @@ namespace FORWARD
 		uint32_t* n_contrib,
 		const float* bg_color,
 		float* out_color,
-		float* out_others);
+		float* out_others,
+		const float T_limit);
 }
 
 

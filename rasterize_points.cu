@@ -23,6 +23,7 @@
 #include <fstream>
 #include <string>
 #include <functional>
+#include "cuda_rasterizer/deformation.h"
 
 #define CHECK_INPUT(x)											\
 	AT_ASSERTM(x.type().is_cuda(), #x " must be a CUDA tensor")
@@ -38,6 +39,7 @@ std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
 
 std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansCUDA(
+	const torch::Tensor& inter_points, // inter_points,  # N x C x 2
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,
 	const torch::Tensor& colors,
@@ -56,7 +58,8 @@ RasterizeGaussiansCUDA(
 	const int degree,
 	const torch::Tensor& campos,
 	const bool prefiltered,
-	const bool debug)
+	const bool debug,
+	const float T_limit)
 {
   if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
 	AT_ERROR("means3D must have dimensions (num_points, 3)");
@@ -67,6 +70,7 @@ RasterizeGaussiansCUDA(
   const int H = image_height;
   const int W = image_width;
 
+  CHECK_INPUT(inter_points);
   CHECK_INPUT(background);
   CHECK_INPUT(means3D);
   CHECK_INPUT(colors);
@@ -109,6 +113,7 @@ RasterizeGaussiansCUDA(
 		binningFunc,
 		imgFunc,
 		P, degree, M,
+		inter_points.contiguous().data<float>(), // inter_points,  # N x C x 2
 		background.contiguous().data<float>(),
 		W, H,
 		means3D.contiguous().data<float>(),
@@ -128,14 +133,15 @@ RasterizeGaussiansCUDA(
 		out_color.contiguous().data<float>(),
 		out_others.contiguous().data<float>(),
 		radii.contiguous().data<int>(),
-		debug);
+		debug,
+		T_limit);
   }
   return std::make_tuple(rendered, out_color, out_others, radii, geomBuffer, binningBuffer, imgBuffer);
 }
 
-std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
  RasterizeGaussiansBackwardCUDA(
-	 const torch::Tensor& background,
+	const torch::Tensor& background,
 	const torch::Tensor& means3D,
 	const torch::Tensor& radii,
 	const torch::Tensor& colors,
@@ -158,7 +164,6 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const torch::Tensor& imageBuffer,
 	const bool debug) 
 {
-
   CHECK_INPUT(background);
   CHECK_INPUT(means3D);
   CHECK_INPUT(radii);
@@ -184,6 +189,7 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	M = sh.size(1);
   }
 
+  torch::Tensor dL_dinter_points = torch::zeros({P, CONTROL_POINTS, 2}, means3D.options());
   torch::Tensor dL_dmeans3D = torch::zeros({P, 3}, means3D.options());
   torch::Tensor dL_dmeans2D = torch::zeros({P, 3}, means3D.options());
   torch::Tensor dL_dcolors = torch::zeros({P, NUM_CHANNELS}, means3D.options());
@@ -226,10 +232,11 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  dL_dsh.contiguous().data<float>(),
 	  dL_dscales.contiguous().data<float>(),
 	  dL_drotations.contiguous().data<float>(),
+	  dL_dinter_points.contiguous().data<float>(),
 	  debug);
   }
 
-  return std::make_tuple(dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dtransMat, dL_dsh, dL_dscales, dL_drotations);
+  return std::make_tuple(dL_dinter_points, dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dtransMat, dL_dsh, dL_dscales, dL_drotations);
 }
 
 torch::Tensor markVisible(

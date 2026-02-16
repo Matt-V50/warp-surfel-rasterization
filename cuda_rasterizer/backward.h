@@ -17,6 +17,7 @@
 #include "device_launch_parameters.h"
 #define GLM_FORCE_CUDA
 #include <glm/glm.hpp>
+#include "deformation.h"
 
 namespace BACKWARD
 {
@@ -27,6 +28,7 @@ namespace BACKWARD
 		int W, int H,
 		float focal_x, float focal_y,
 		const float* bg_color,
+		const Coeffs* pchip_coeffs,
 		const float2* means2D,
 		const float4* normal_opacity,
 		const float* transMats,
@@ -40,7 +42,8 @@ namespace BACKWARD
 		float3* dL_dmean2D,
 		float* dL_dnormal3D,
 		float* dL_dopacity,
-		float* dL_dcolors);
+		float* dL_dcolors,
+		float* dL_dinter_points);
 
 	void preprocess(
 		int P, int D, int M,

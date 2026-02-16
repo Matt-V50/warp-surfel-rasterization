@@ -166,6 +166,7 @@ CudaRasterizer::GeometryState CudaRasterizer::GeometryState::fromChunk(char*& ch
 	cub::DeviceScan::InclusiveSum(nullptr, geom.scan_size, geom.tiles_touched, geom.tiles_touched, P);
 	obtain(chunk, geom.scanning_space, geom.scan_size, 128);
 	obtain(chunk, geom.point_offsets, P, 128);
+	obtain(chunk, geom.pchip_coeffs, P * CONTROL_POINTS, 128);
 	return geom;
 }
 
@@ -200,6 +201,7 @@ int CudaRasterizer::Rasterizer::forward(
 	std::function<char* (size_t)> binningBuffer,
 	std::function<char* (size_t)> imageBuffer,
 	const int P, int D, int M,
+	const float* inter_points, // inter_points,  # N x C x 2
 	const float* background,
 	const int width, int height,
 	const float* means3D,
@@ -218,7 +220,8 @@ int CudaRasterizer::Rasterizer::forward(
 	float* out_color,
 	float* out_others,
 	int* radii,
-	bool debug)
+	bool debug,
+	const float T_limit)
 {
 	const float focal_y = height / (2.0f * tan_fovy);
 	const float focal_x = width / (2.0f * tan_fovx);
@@ -248,6 +251,7 @@ int CudaRasterizer::Rasterizer::forward(
 	// Run preprocessing per-Gaussian (transformation, bounding, conversion of SHs to RGB)
 	CHECK_CUDA(FORWARD::preprocess(
 		P, D, M,
+		inter_points,
 		means3D,
 		(glm::vec2*)scales,
 		scale_modifier,
@@ -263,6 +267,7 @@ int CudaRasterizer::Rasterizer::forward(
 		focal_x, focal_y,
 		tan_fovx, tan_fovy,
 		radii,
+		geomState.pchip_coeffs,
 		geomState.means2D,
 		geomState.depths,
 		geomState.transMat,
@@ -327,6 +332,7 @@ int CudaRasterizer::Rasterizer::forward(
 		binningState.point_list,
 		width, height,
 		focal_x, focal_y,
+		geomState.pchip_coeffs,
 		geomState.means2D,
 		feature_ptr,
 		transMat_ptr,
@@ -336,7 +342,8 @@ int CudaRasterizer::Rasterizer::forward(
 		imgState.n_contrib,
 		background,
 		out_color,
-		out_others), debug)
+		out_others,
+		T_limit), debug)
 
 	return num_rendered;
 }
@@ -373,6 +380,7 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dsh,
 	float* dL_dscale,
 	float* dL_drot,
+	float* dL_dinter_points,
 	bool debug)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
@@ -404,6 +412,7 @@ void CudaRasterizer::Rasterizer::backward(
 		width, height,
 		focal_x, focal_y,
 		background,
+		geomState.pchip_coeffs,
 		geomState.means2D,
 		geomState.normal_opacity,
 		color_ptr,
@@ -417,7 +426,9 @@ void CudaRasterizer::Rasterizer::backward(
 		(float3*)dL_dmean2D,
 		dL_dnormal,
 		dL_dopacity,
-		dL_dcolor), debug)
+		dL_dcolor,
+		dL_dinter_points
+	), debug)
 
 	// Take care of the rest of preprocessing. Was the precomputed covariance
 	// given to us or a scales/rot pair? If precomputed, pass that. If not,

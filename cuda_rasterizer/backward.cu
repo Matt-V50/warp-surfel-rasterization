@@ -148,6 +148,7 @@ renderCUDA(
 	int W, int H,
 	float focal_x, float focal_y,
 	const float* __restrict__ bg_color,
+	const Coeffs* __restrict__ pchip_coeffs,
 	const float2* __restrict__ points_xy_image,
 	const float4* __restrict__ normal_opacity,
 	const float* __restrict__ transMats,
@@ -161,7 +162,8 @@ renderCUDA(
 	float3* __restrict__ dL_dmean2D,
 	float* __restrict__ dL_dnormal3D,
 	float* __restrict__ dL_dopacity,
-	float* __restrict__ dL_dcolors)
+	float* __restrict__ dL_dcolors,
+	float* __restrict__ dL_dinter_points)
 {
 	// We rasterize again. Compute necessary block info.
 	auto block = cg::this_thread_block();
@@ -182,6 +184,7 @@ renderCUDA(
 
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
+	__shared__ Coeffs collected_pchip_coeffs[BLOCK_SIZE * CONTROL_POINTS];
 	__shared__ float4 collected_normal_opacity[BLOCK_SIZE];
 	__shared__ float collected_colors[C * BLOCK_SIZE];
 	__shared__ float3 collected_Tu[BLOCK_SIZE];
@@ -260,6 +263,10 @@ renderCUDA(
 			const int coll_id = point_list[range.y - progress - 1];
 			collected_id[block.thread_rank()] = coll_id;
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
+			for (int c = 0; c < CONTROL_POINTS; c++) {
+				collected_pchip_coeffs[block.thread_rank() * CONTROL_POINTS + c] = 
+					pchip_coeffs[coll_id * CONTROL_POINTS + c];
+			}
 			collected_normal_opacity[block.thread_rank()] = normal_opacity[coll_id];
 			collected_Tu[block.thread_rank()] = {transMats[9 * coll_id+0], transMats[9 * coll_id+1], transMats[9 * coll_id+2]};
 			collected_Tv[block.thread_rank()] = {transMats[9 * coll_id+3], transMats[9 * coll_id+4], transMats[9 * coll_id+5]};
@@ -289,7 +296,16 @@ renderCUDA(
 			float3 l = pix.y * Tw - Tv;
 			float3 p = cross(k, l);
 			if (p.z == 0.0) continue;
+			float2 s_o = {p.x / p.z, p.y / p.z};
 			float2 s = {p.x / p.z, p.y / p.z};
+			if constexpr (CONTROL_POINTS == 1) {
+				float x = pchip_eval(s.x / RESCALE_FACTOR, collected_pchip_coeffs[j]);
+				s = {x * RESCALE_FACTOR, s.y};
+			} else if constexpr (CONTROL_POINTS == 2) {
+				float x = pchip_eval(s.x / RESCALE_FACTOR, collected_pchip_coeffs[j * 2]);
+				float y = pchip_eval(s.y / RESCALE_FACTOR, collected_pchip_coeffs[j * 2 + 1]);
+				s = {x * RESCALE_FACTOR, y * RESCALE_FACTOR};
+			}
 			float rho3d = (s.x * s.x + s.y * s.y); 
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
 			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
@@ -397,11 +413,51 @@ renderCUDA(
 #endif
 
 			if (rho3d <= rho2d) {
-				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
-				const float2 dL_ds = {
-					dL_dG * -G * s.x + dL_dz * Tw.x,
-					dL_dG * -G * s.y + dL_dz * Tw.y
+				const float dL_drho3d = dL_dG * (-0.5f * G);
+				float2 dL_ds = {
+					0.0f, 0.0f
 				};
+				if constexpr (CONTROL_POINTS == 1) {
+					float dL_dx = dL_dG * (-G) * s.x;  // dL/dx
+					float grad_x0, grad_y0, dx_dsx;
+					pchip_backward_with_doutdt(s_o.x / RESCALE_FACTOR, collected_pchip_coeffs[j], dL_dx, grad_x0, grad_y0, dx_dsx);
+					grad_x0 *= RESCALE_FACTOR;	
+					grad_y0 *= RESCALE_FACTOR;
+
+					dL_ds.x = dL_dG * (-G) * s.x * dx_dsx + dL_dz * Tw.x;
+					dL_ds.y = dL_dG * (-G) * s.y + dL_dz * Tw.y;  // s.y 不变
+					atomicAdd(&dL_dinter_points[global_id * 2 + 0], grad_x0);
+					atomicAdd(&dL_dinter_points[global_id * 2 + 1], grad_y0);
+					
+				} else if constexpr (CONTROL_POINTS == 2) {
+					float grad_x0, grad_y0, dx_dsx;
+					float grad_x1, grad_y1, dy_dsy;
+					float dL_dx = dL_dG * (-G) * s.x;
+					float dL_dy = dL_dG * (-G) * s.y;
+					pchip_backward_with_doutdt(s_o.x / RESCALE_FACTOR, collected_pchip_coeffs[j * 2], dL_dx, grad_x0, grad_y0, dx_dsx);
+					pchip_backward_with_doutdt(s_o.y / RESCALE_FACTOR, collected_pchip_coeffs[j * 2 + 1], dL_dy, grad_x1, grad_y1, dy_dsy);
+					grad_x0 *= RESCALE_FACTOR;
+					grad_y0 *= RESCALE_FACTOR;
+					grad_x1 *= RESCALE_FACTOR;
+					grad_y1 *= RESCALE_FACTOR;
+
+					dL_ds.x = dL_dG * (-G) * s.x * dx_dsx + dL_dz * Tw.x;
+					dL_ds.y = dL_dG * (-G) * s.y * dy_dsy + dL_dz * Tw.y;
+					
+					atomicAdd(&dL_dinter_points[global_id * 4 + 0], grad_x0*RESCALE_FACTOR);
+					atomicAdd(&dL_dinter_points[global_id * 4 + 1], grad_y0*RESCALE_FACTOR);
+					atomicAdd(&dL_dinter_points[global_id * 4 + 2], grad_x1*RESCALE_FACTOR);
+					atomicAdd(&dL_dinter_points[global_id * 4 + 3], grad_y1*RESCALE_FACTOR);
+					
+				}else {
+				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
+					dL_ds = {
+						dL_dG * -G * s.x + dL_dz * Tw.x,
+						dL_dG * -G * s.y + dL_dz * Tw.y
+					};
+				}
+
+				
 				const float3 dz_dTw = {s.x, s.y, 1.0};
 				const float dsx_pz = dL_ds.x / p.z;
 				const float dsy_pz = dL_ds.y / p.z;
@@ -695,6 +751,7 @@ void BACKWARD::render(
 	int W, int H,
 	float focal_x, float focal_y,
 	const float* bg_color,
+	const Coeffs* pchip_coeffs,
 	const float2* means2D,
 	const float4* normal_opacity,
 	const float* colors,
@@ -708,7 +765,8 @@ void BACKWARD::render(
 	float3* dL_dmean2D,
 	float* dL_dnormal3D,
 	float* dL_dopacity,
-	float* dL_dcolors)
+	float* dL_dcolors,
+	float* dL_dinter_points)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
 		ranges,
@@ -716,6 +774,7 @@ void BACKWARD::render(
 		W, H,
 		focal_x, focal_y,
 		bg_color,
+		pchip_coeffs,
 		means2D,
 		normal_opacity,
 		transMats,
@@ -729,6 +788,7 @@ void BACKWARD::render(
 		dL_dmean2D,
 		dL_dnormal3D,
 		dL_dopacity,
-		dL_dcolors
+		dL_dcolors,
+		dL_dinter_points
 		);
 }

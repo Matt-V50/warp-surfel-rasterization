@@ -33,6 +33,7 @@ namespace CudaRasterizer
 			std::function<char* (size_t)> binningBuffer,
 			std::function<char* (size_t)> imageBuffer,
 			const int P, int D, int M,
+			const float* inter_points,
 			const float* background,
 			const int width, int height,
 			const float* means3D,
@@ -51,7 +52,8 @@ namespace CudaRasterizer
 			float* out_color,
 			float* out_others,
 			int* radii = nullptr,
-			bool debug = false);
+			bool debug = false,
+			const float T_limit = -1.0f);
 
 		static void backward(
 			const int P, int D, int M, int R,
@@ -83,6 +85,7 @@ namespace CudaRasterizer
 			float* dL_dsh,
 			float* dL_dscale,
 			float* dL_drot,
+			float* dL_dinter_points,
 			bool debug);
 	};
 };

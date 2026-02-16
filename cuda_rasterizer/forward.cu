@@ -13,6 +13,7 @@
 #include "auxiliary.h"
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
+
 namespace cg = cooperative_groups;
 
 // Forward method for converting the input spherical harmonics
@@ -147,6 +148,7 @@ __device__ bool compute_aabb(
 // Perform initial steps for each Gaussian prior to rasterization.
 template<int C>
 __global__ void preprocessCUDA(int P, int D, int M,
+	const float* inter_points,
 	const float* orig_points,
 	const glm::vec2* scales,
 	const float scale_modifier,
@@ -163,6 +165,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const float tan_fovx, const float tan_fovy,
 	const float focal_x, const float focal_y,
 	int* radii,
+	Coeffs* pchip_coeffs,
 	float2* points_xy_image,
 	float* depths,
 	float* transMats,
@@ -246,6 +249,12 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	depths[idx] = p_view.z;
 	radii[idx] = (int)radius;
 	points_xy_image[idx] = point_image;
+	for(int i = 0; i < CONTROL_POINTS; i++) {
+		int base = (idx * CONTROL_POINTS + i) * 2;
+		float x0 = inter_points[base];
+    	float y0 = inter_points[base + 1];
+		pchip_coeffs[idx * CONTROL_POINTS + i] = pchip_precompute(x0, y0);
+	}
 	normal_opacity[idx] = {normal.x, normal.y, normal.z, opacities[idx]};
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
 }
@@ -260,6 +269,7 @@ renderCUDA(
 	const uint32_t* __restrict__ point_list,
 	int W, int H,
 	float focal_x, float focal_y,
+	const Coeffs* __restrict__ pchip_coeffs,
 	const float2* __restrict__ points_xy_image,
 	const float* __restrict__ features,
 	const float* __restrict__ transMats,
@@ -269,7 +279,8 @@ renderCUDA(
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
-	float* __restrict__ out_others)
+	float* __restrict__ out_others,
+	const float T_limit)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -293,6 +304,7 @@ renderCUDA(
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
+	__shared__ Coeffs collected_inter_points[BLOCK_SIZE * CONTROL_POINTS];
 	__shared__ float4 collected_normal_opacity[BLOCK_SIZE];
 	__shared__ float3 collected_Tu[BLOCK_SIZE];
 	__shared__ float3 collected_Tv[BLOCK_SIZE];
@@ -333,6 +345,10 @@ renderCUDA(
 			int coll_id = point_list[range.x + progress];
 			collected_id[block.thread_rank()] = coll_id;
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
+			for (int c = 0; c < CONTROL_POINTS; c++) {
+				collected_inter_points[block.thread_rank() * CONTROL_POINTS + c] = 
+					pchip_coeffs[coll_id * CONTROL_POINTS + c];
+			}
 			collected_normal_opacity[block.thread_rank()] = normal_opacity[coll_id];
 			collected_Tu[block.thread_rank()] = {transMats[9 * coll_id+0], transMats[9 * coll_id+1], transMats[9 * coll_id+2]};
 			collected_Tv[block.thread_rank()] = {transMats[9 * coll_id+3], transMats[9 * coll_id+4], transMats[9 * coll_id+5]};
@@ -359,7 +375,21 @@ renderCUDA(
 			if (p.z == 0.0) continue;
 			// Perspective division to get the intersection (u,v), Eq. (10)
 			float2 s = {p.x / p.z, p.y / p.z};
-			float rho3d = (s.x * s.x + s.y * s.y); 
+			
+			if constexpr (CONTROL_POINTS == 1) {
+				// if (abs(s.x) > 3.0f) continue;
+				float x = pchip_eval(s.x / RESCALE_FACTOR, collected_inter_points[j]);
+				s = {x * RESCALE_FACTOR, s.y};
+			} else if constexpr (CONTROL_POINTS == 2) {
+				// if (abs(s.x) > 3.0f || abs(s.y) > 3.0f) continue;
+				float x = pchip_eval(s.x / RESCALE_FACTOR, collected_inter_points[j * 2]);
+				float y = pchip_eval(s.y / RESCALE_FACTOR, collected_inter_points[j * 2 + 1]);
+				s = {x * RESCALE_FACTOR, y * RESCALE_FACTOR};
+			}
+			
+			float rho3d = (s.x * s.x + s.y * s.y);
+			
+
 			// Add low pass filter
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
 			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
@@ -418,6 +448,17 @@ renderCUDA(
 				C[ch] += features[collected_id[j] * CHANNELS + ch] * w;
 			T = test_T;
 
+			if (T_limit > 0.0f){
+				T = 0;
+				if (test_T > T_limit) {
+					T = 1;
+				}
+				// if (T < T_limit) {
+				// 	T = 0.0f;
+				// 	done = true;
+				// }
+			}
+
 			// Keep track of last range entry to update this
 			// pixel.
 			last_contributor = contributor;
@@ -453,6 +494,7 @@ void FORWARD::render(
 	const uint32_t* point_list,
 	int W, int H,
 	float focal_x, float focal_y,
+	const Coeffs* pchip_coeffs,
 	const float2* means2D,
 	const float* colors,
 	const float* transMats,
@@ -462,13 +504,15 @@ void FORWARD::render(
 	uint32_t* n_contrib,
 	const float* bg_color,
 	float* out_color,
-	float* out_others)
+	float* out_others,
+	const float T_limit)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
 		point_list,
 		W, H,
 		focal_x, focal_y,
+		pchip_coeffs,
 		means2D,
 		colors,
 		transMats,
@@ -478,10 +522,12 @@ void FORWARD::render(
 		n_contrib,
 		bg_color,
 		out_color,
-		out_others);
+		out_others,
+		T_limit);
 }
 
 void FORWARD::preprocess(int P, int D, int M,
+	const float* inter_points,
 	const float* means3D,
 	const glm::vec2* scales,
 	const float scale_modifier,
@@ -498,6 +544,7 @@ void FORWARD::preprocess(int P, int D, int M,
 	const float focal_x, const float focal_y,
 	const float tan_fovx, const float tan_fovy,
 	int* radii,
+	Coeffs* pchip_coeffs,
 	float2* means2D,
 	float* depths,
 	float* transMats,
@@ -509,6 +556,7 @@ void FORWARD::preprocess(int P, int D, int M,
 {
 	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
 		P, D, M,
+		inter_points,
 		means3D,
 		scales,
 		scale_modifier,
@@ -525,6 +573,7 @@ void FORWARD::preprocess(int P, int D, int M,
 		tan_fovx, tan_fovy,
 		focal_x, focal_y,
 		radii,
+		pchip_coeffs,
 		means2D,
 		depths,
 		transMats,
