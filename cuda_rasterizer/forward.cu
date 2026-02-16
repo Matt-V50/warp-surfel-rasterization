@@ -253,7 +253,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		int base = (idx * CONTROL_POINTS + i) * 2;
 		float x0 = inter_points[base];
     	float y0 = inter_points[base + 1];
-		pchip_coeffs[idx * CONTROL_POINTS + i] = pchip_precompute(x0, y0);
+		pchip_coeffs[idx * CONTROL_POINTS + i] = coeffs_precompute(x0, y0);
 	}
 	normal_opacity[idx] = {normal.x, normal.y, normal.z, opacities[idx]};
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);
@@ -378,12 +378,12 @@ renderCUDA(
 			
 			if constexpr (CONTROL_POINTS == 1) {
 				// if (abs(s.x) > 3.0f) continue;
-				float x = pchip_eval(s.x / RESCALE_FACTOR, collected_inter_points[j]);
+				float x = coeffs_eval(s.x / RESCALE_FACTOR, collected_inter_points[j]);
 				s = {x * RESCALE_FACTOR, s.y};
 			} else if constexpr (CONTROL_POINTS == 2) {
 				// if (abs(s.x) > 3.0f || abs(s.y) > 3.0f) continue;
-				float x = pchip_eval(s.x / RESCALE_FACTOR, collected_inter_points[j * 2]);
-				float y = pchip_eval(s.y / RESCALE_FACTOR, collected_inter_points[j * 2 + 1]);
+				float x = coeffs_eval(s.x / RESCALE_FACTOR, collected_inter_points[j * 2]);
+				float y = coeffs_eval(s.y / RESCALE_FACTOR, collected_inter_points[j * 2 + 1]);
 				s = {x * RESCALE_FACTOR, y * RESCALE_FACTOR};
 			}
 			

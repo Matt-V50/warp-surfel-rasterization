@@ -18,7 +18,7 @@ float pchip_edge_derivative_device(float h0, float h1, float m0, float m1) {
 }
 
 __device__ __forceinline__
-Coeffs pchip_precompute(float x0, float y0) {
+Coeffs coeffs_precompute(float x0, float y0) {
     float d0 = 1.0f;
     float d1 = y0 / x0;
     float d2 = (1.0f - y0) / (1.0f - x0);
@@ -35,7 +35,7 @@ Coeffs pchip_precompute(float x0, float y0) {
 }
 
 __device__ __forceinline__ 
-float pchip_eval(float t, const Coeffs& c) {
+float coeffs_eval(float t, const Coeffs& c) {
     float x_i, y_i, y_ip1, h_i, m_i, m_ip1;
     
     if (t < 0.0f) {
@@ -195,7 +195,7 @@ void pchip_backward(
 }
 
 __device__ __forceinline__
-void pchip_eval_with_grad(float t, const Coeffs& c, float& dout_dt) {
+void coeffs_eval_with_grad(float t, const Coeffs& c, float& dout_dt) {
     
     float x0 = c.x0;
     float y0 = c.y0;

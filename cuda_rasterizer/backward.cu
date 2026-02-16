@@ -299,11 +299,11 @@ renderCUDA(
 			float2 s_o = {p.x / p.z, p.y / p.z};
 			float2 s = {p.x / p.z, p.y / p.z};
 			if constexpr (CONTROL_POINTS == 1) {
-				float x = pchip_eval(s.x / RESCALE_FACTOR, collected_pchip_coeffs[j]);
+				float x = coeffs_eval(s.x / RESCALE_FACTOR, collected_pchip_coeffs[j]);
 				s = {x * RESCALE_FACTOR, s.y};
 			} else if constexpr (CONTROL_POINTS == 2) {
-				float x = pchip_eval(s.x / RESCALE_FACTOR, collected_pchip_coeffs[j * 2]);
-				float y = pchip_eval(s.y / RESCALE_FACTOR, collected_pchip_coeffs[j * 2 + 1]);
+				float x = coeffs_eval(s.x / RESCALE_FACTOR, collected_pchip_coeffs[j * 2]);
+				float y = coeffs_eval(s.y / RESCALE_FACTOR, collected_pchip_coeffs[j * 2 + 1]);
 				s = {x * RESCALE_FACTOR, y * RESCALE_FACTOR};
 			}
 			float rho3d = (s.x * s.x + s.y * s.y); 
@@ -420,7 +420,7 @@ renderCUDA(
 				if constexpr (CONTROL_POINTS == 1) {
 					float dL_dx = dL_dG * (-G) * s.x;  // dL/dx
 					float grad_x0, grad_y0, dx_dsx;
-					pchip_backward_with_doutdt(s_o.x / RESCALE_FACTOR, collected_pchip_coeffs[j], dL_dx, grad_x0, grad_y0, dx_dsx);
+					backward_with_doutdt(s_o.x / RESCALE_FACTOR, collected_pchip_coeffs[j], dL_dx, grad_x0, grad_y0, dx_dsx);
 					grad_x0 *= RESCALE_FACTOR;	
 					grad_y0 *= RESCALE_FACTOR;
 
@@ -434,8 +434,8 @@ renderCUDA(
 					float grad_x1, grad_y1, dy_dsy;
 					float dL_dx = dL_dG * (-G) * s.x;
 					float dL_dy = dL_dG * (-G) * s.y;
-					pchip_backward_with_doutdt(s_o.x / RESCALE_FACTOR, collected_pchip_coeffs[j * 2], dL_dx, grad_x0, grad_y0, dx_dsx);
-					pchip_backward_with_doutdt(s_o.y / RESCALE_FACTOR, collected_pchip_coeffs[j * 2 + 1], dL_dy, grad_x1, grad_y1, dy_dsy);
+					backward_with_doutdt(s_o.x / RESCALE_FACTOR, collected_pchip_coeffs[j * 2], dL_dx, grad_x0, grad_y0, dx_dsx);
+					backward_with_doutdt(s_o.y / RESCALE_FACTOR, collected_pchip_coeffs[j * 2 + 1], dL_dy, grad_x1, grad_y1, dy_dsy);
 					grad_x0 *= RESCALE_FACTOR;
 					grad_y0 *= RESCALE_FACTOR;
 					grad_x1 *= RESCALE_FACTOR;

@@ -23,7 +23,7 @@ float pchip_edge_derivative_device(float h0, float h1, float m0, float m1) {
 }
 
 __device__ __forceinline__
-Coeffs pchip_precompute(float x0, float y0) {
+Coeffs coeffs_precompute(float x0, float y0) {
     float x0 = clampf(x0, 1e-6f, 1.0f - 1e-6f);
     float d0 = 1.0f;
     float d1 = y0 / x0;
@@ -41,7 +41,7 @@ Coeffs pchip_precompute(float x0, float y0) {
 }
 
 __device__ __forceinline__ 
-float pchip_eval(float t, const Coeffs& c) {
+float coeffs_eval(float t, const Coeffs& c) {
     float x_i, y_i, y_ip1, h_i, m_i, m_ip1;
     if (t < -1 || t > 1) {
         return t;
@@ -67,7 +67,7 @@ float pchip_eval(float t, const Coeffs& c) {
 }
 
 __device__ __forceinline__
-void pchip_backward_with_doutdt(
+void backward_with_doutdt(
     float t, 
     const Coeffs& c,
     float grad_output,    // dL/d(output)
@@ -120,7 +120,7 @@ void pchip_backward_with_doutdt(
     float dH2_ds = -6.0f*s2 + 6.0f*s;
     float dH3_ds = 3.0f*s2 - 2.0f*s;
     
-    // ========== 计算 dout/dt (原 pchip_eval_with_grad 的功能) ==========
+    // ========== 计算 dout/dt (原 coeffs_eval_with_grad 的功能) ==========
     float dout_ds = dH0_ds * y_i + dH1_ds * h_i * m_i +
                     dH2_ds * y_ip1 + dH3_ds * h_i * m_ip1;
     dout_dt = dout_ds / h_i;
