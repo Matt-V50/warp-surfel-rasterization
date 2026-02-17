@@ -21,7 +21,9 @@ float pchip_edge_derivative(float h0, float h1, float d0, float d1) {
 // Control points: [-1, x0, 1] -> [-1, y0, 1]
 // ============================================================
 __device__ __forceinline__
-Coeffs coeffs_precompute(float x0, float y0) {
+Coeffs coeffs_precompute(const float* point) {
+    float x0 = point[0];
+    float y0 = point[1];
     float h0 = x0 + 1.0f;          // x0 - (-1)
     float h1 = 1.0f - x0;          // 1 - x0
 
@@ -238,4 +240,20 @@ void backward_with_doutdt(
         grad_y0 = grad_output * (H0  // dout/dy_i, y_i = y0
                                 + dout_dm1 * dm1_dy0 + dout_dm2 * dm2_dy0);
     }
+}
+
+__device__ __forceinline__
+float coeffs_backward_atomic(
+    float t_raw,
+    float rescale,
+    const Coeffs& c,
+    float grad_output,
+    float* dL_dinter_points,
+    int base_idx              // global_id * CONTROL_POINTS * 2 + d * 2
+) {
+    float grad_x0, grad_y0, dout_dt;
+    backward_with_doutdt(t_raw / rescale, c, grad_output, grad_x0, grad_y0, dout_dt);
+    atomicAdd(&dL_dinter_points[base_idx + 0], grad_x0 * rescale);
+    atomicAdd(&dL_dinter_points[base_idx + 1], grad_y0 * rescale);
+    return dout_dt;
 }

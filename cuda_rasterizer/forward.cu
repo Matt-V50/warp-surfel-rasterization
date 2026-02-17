@@ -250,10 +250,8 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	radii[idx] = (int)radius;
 	points_xy_image[idx] = point_image;
 	for(int i = 0; i < CONTROL_POINTS; i++) {
-		int base = (idx * CONTROL_POINTS + i) * 2;
-		float x0 = inter_points[base];
-    	float y0 = inter_points[base + 1];
-		pchip_coeffs[idx * CONTROL_POINTS + i] = coeffs_precompute(x0, y0);
+		int base = (idx * CONTROL_POINTS + i) * DOF;
+		pchip_coeffs[idx * CONTROL_POINTS + i] = coeffs_precompute(&inter_points[base]);
 	}
 	normal_opacity[idx] = {normal.x, normal.y, normal.z, opacities[idx]};
 	tiles_touched[idx] = (rect_max.y - rect_min.y) * (rect_max.x - rect_min.x);

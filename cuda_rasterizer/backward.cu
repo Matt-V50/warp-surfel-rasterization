@@ -299,11 +299,11 @@ renderCUDA(
 			float2 s_o = {p.x / p.z, p.y / p.z};
 			float2 s = {p.x / p.z, p.y / p.z};
 			if constexpr (CONTROL_POINTS == 1) {
-				float x = coeffs_eval(s.x / RESCALE_FACTOR, collected_pchip_coeffs[j]);
+				float x = coeffs_eval(s.x / RESCALE_FACTOR, collected_pchip_coeffs[j * CONTROL_POINTS]);
 				s = {x * RESCALE_FACTOR, s.y};
 			} else if constexpr (CONTROL_POINTS == 2) {
-				float x = coeffs_eval(s.x / RESCALE_FACTOR, collected_pchip_coeffs[j * 2]);
-				float y = coeffs_eval(s.y / RESCALE_FACTOR, collected_pchip_coeffs[j * 2 + 1]);
+				float x = coeffs_eval(s.x / RESCALE_FACTOR, collected_pchip_coeffs[j * CONTROL_POINTS]);
+				float y = coeffs_eval(s.y / RESCALE_FACTOR, collected_pchip_coeffs[j * CONTROL_POINTS + 1]);
 				s = {x * RESCALE_FACTOR, y * RESCALE_FACTOR};
 			}
 			float rho3d = (s.x * s.x + s.y * s.y); 
@@ -419,36 +419,22 @@ renderCUDA(
 				};
 				if constexpr (CONTROL_POINTS == 1) {
 					float dL_dx = dL_dG * (-G) * s.x;  // dL/dx
-					float grad_x0, grad_y0, dx_dsx;
-					backward_with_doutdt(s_o.x / RESCALE_FACTOR, collected_pchip_coeffs[j], dL_dx, grad_x0, grad_y0, dx_dsx);
-					grad_x0 *= RESCALE_FACTOR;	
-					grad_y0 *= RESCALE_FACTOR;
-
+					const int base_idx = global_id * DOF * CONTROL_POINTS;
+					float dx_dsx = coeffs_backward_atomic(s_o.x, RESCALE_FACTOR, collected_pchip_coeffs[j],
+														dL_dx, dL_dinter_points, base_idx);
 					dL_ds.x = dL_dG * (-G) * s.x * dx_dsx + dL_dz * Tw.x;
-					dL_ds.y = dL_dG * (-G) * s.y + dL_dz * Tw.y;  // s.y 不变
-					atomicAdd(&dL_dinter_points[global_id * 2 + 0], grad_x0);
-					atomicAdd(&dL_dinter_points[global_id * 2 + 1], grad_y0);
+					dL_ds.y = dL_dG * (-G) * s.y + dL_dz * Tw.y;
 					
 				} else if constexpr (CONTROL_POINTS == 2) {
-					float grad_x0, grad_y0, dx_dsx;
-					float grad_x1, grad_y1, dy_dsy;
 					float dL_dx = dL_dG * (-G) * s.x;
 					float dL_dy = dL_dG * (-G) * s.y;
-					backward_with_doutdt(s_o.x / RESCALE_FACTOR, collected_pchip_coeffs[j * 2], dL_dx, grad_x0, grad_y0, dx_dsx);
-					backward_with_doutdt(s_o.y / RESCALE_FACTOR, collected_pchip_coeffs[j * 2 + 1], dL_dy, grad_x1, grad_y1, dy_dsy);
-					grad_x0 *= RESCALE_FACTOR;
-					grad_y0 *= RESCALE_FACTOR;
-					grad_x1 *= RESCALE_FACTOR;
-					grad_y1 *= RESCALE_FACTOR;
-
+					const int base_idx = global_id * DOF * CONTROL_POINTS;
+					float dx_dsx = coeffs_backward_atomic(s_o.x, RESCALE_FACTOR, collected_pchip_coeffs[j * CONTROL_POINTS],
+														dL_dx, dL_dinter_points, base_idx);
+					float dy_dsy = coeffs_backward_atomic(s_o.y, RESCALE_FACTOR, collected_pchip_coeffs[j * CONTROL_POINTS + 1],
+														dL_dy, dL_dinter_points, base_idx + DOF);
 					dL_ds.x = dL_dG * (-G) * s.x * dx_dsx + dL_dz * Tw.x;
-					dL_ds.y = dL_dG * (-G) * s.y * dy_dsy + dL_dz * Tw.y;
-					
-					atomicAdd(&dL_dinter_points[global_id * 4 + 0], grad_x0*RESCALE_FACTOR);
-					atomicAdd(&dL_dinter_points[global_id * 4 + 1], grad_y0*RESCALE_FACTOR);
-					atomicAdd(&dL_dinter_points[global_id * 4 + 2], grad_x1*RESCALE_FACTOR);
-					atomicAdd(&dL_dinter_points[global_id * 4 + 3], grad_y1*RESCALE_FACTOR);
-					
+					dL_ds.y = dL_dG * (-G) * s.y * dy_dsy + dL_dz * Tw.y;					
 				}else {
 				// Update gradients w.r.t. covariance of Gaussian 3x3 (T)
 					dL_ds = {
