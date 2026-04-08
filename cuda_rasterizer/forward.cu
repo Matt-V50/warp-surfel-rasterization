@@ -302,7 +302,8 @@ renderCUDA(
 	// Allocate storage for batches of collectively fetched data.
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
-	__shared__ Coeffs collected_inter_points[BLOCK_SIZE * CONTROL_POINTS];
+	constexpr int SHARED_SIZE = CONTROL_POINTS > 0 ? BLOCK_SIZE * CONTROL_POINTS : 1;
+	__shared__ Coeffs collected_coeffs[SHARED_SIZE];
 	__shared__ float4 collected_normal_opacity[BLOCK_SIZE];
 	__shared__ float3 collected_Tu[BLOCK_SIZE];
 	__shared__ float3 collected_Tv[BLOCK_SIZE];
@@ -344,7 +345,7 @@ renderCUDA(
 			collected_id[block.thread_rank()] = coll_id;
 			collected_xy[block.thread_rank()] = points_xy_image[coll_id];
 			for (int c = 0; c < CONTROL_POINTS; c++) {
-				collected_inter_points[block.thread_rank() * CONTROL_POINTS + c] = 
+				collected_coeffs[block.thread_rank() * CONTROL_POINTS + c] = 
 					pchip_coeffs[coll_id * CONTROL_POINTS + c];
 			}
 			collected_normal_opacity[block.thread_rank()] = normal_opacity[coll_id];
@@ -373,28 +374,34 @@ renderCUDA(
 			if (p.z == 0.0) continue;
 			// Perspective division to get the intersection (u,v), Eq. (10)
 			float2 s = {p.x / p.z, p.y / p.z};
+			float2 s_o = {p.x / p.z, p.y / p.z};
 			
 			if constexpr (CONTROL_POINTS == 1) {
 				// if (abs(s.x) > 3.0f) continue;
-				float x = coeffs_eval(s.x / RESCALE_FACTOR, collected_inter_points[j]);
+				float x = coeffs_eval(s.x / RESCALE_FACTOR, collected_coeffs[j]);
 				s = {x * RESCALE_FACTOR, s.y};
 			} else if constexpr (CONTROL_POINTS == 2) {
 				// if (abs(s.x) > 3.0f || abs(s.y) > 3.0f) continue;
-				float x = coeffs_eval(s.x / RESCALE_FACTOR, collected_inter_points[j * 2]);
-				float y = coeffs_eval(s.y / RESCALE_FACTOR, collected_inter_points[j * 2 + 1]);
+				float x = coeffs_eval(s.x / RESCALE_FACTOR, collected_coeffs[j * CONTROL_POINTS]);
+				float y = coeffs_eval(s.y / RESCALE_FACTOR, collected_coeffs[j * CONTROL_POINTS + 1]);
 				s = {x * RESCALE_FACTOR, y * RESCALE_FACTOR};
 			}
 			
 			float rho3d = (s.x * s.x + s.y * s.y);
+			float rho3d_o = (s_o.x * s_o.x + s_o.y * s_o.y);
 			
 
 			// Add low pass filter
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
 			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
-			float rho = min(rho3d, rho2d);
-
+			float rho;
+			if (rho2d < rho3d_o){
+				rho = rho2d;
+			}else{
+				rho = rho3d;
+			}
 			// compute depth
-			float depth = (s.x * Tw.x + s.y * Tw.y) + Tw.z;
+			float depth = (s_o.x * Tw.x + s_o.y * Tw.y) + Tw.z;
 			// if a point is too small, its depth is not reliable?
 			// depth = (rho3d <= rho2d) ? depth : Tw.z 
 			if (depth < near_n) continue;

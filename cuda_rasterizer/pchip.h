@@ -26,7 +26,8 @@ __device__ __forceinline__
 Coeffs coeffs_precompute(const float* point) {
     float x0 = point[0];
     float y0 = point[1];
-    float x0 = clampf(x0, 1e-6f, 1.0f - 1e-6f);
+    float eps = 1e-6f;
+    x0 = clampf(x0, eps, 1.0f - eps);
     float d0 = 1.0f;
     float d1 = y0 / x0;
     float d2 = (1.0f - y0) / (1.0f - x0);

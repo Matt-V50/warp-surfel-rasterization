@@ -184,7 +184,8 @@ renderCUDA(
 
 	__shared__ int collected_id[BLOCK_SIZE];
 	__shared__ float2 collected_xy[BLOCK_SIZE];
-	__shared__ Coeffs collected_pchip_coeffs[BLOCK_SIZE * CONTROL_POINTS];
+	constexpr int SHARED_SIZE = CONTROL_POINTS > 0 ? BLOCK_SIZE * CONTROL_POINTS : 1;
+	__shared__ Coeffs collected_pchip_coeffs[SHARED_SIZE];
 	__shared__ float4 collected_normal_opacity[BLOCK_SIZE];
 	__shared__ float collected_colors[C * BLOCK_SIZE];
 	__shared__ float3 collected_Tu[BLOCK_SIZE];
@@ -307,12 +308,18 @@ renderCUDA(
 				s = {x * RESCALE_FACTOR, y * RESCALE_FACTOR};
 			}
 			float rho3d = (s.x * s.x + s.y * s.y); 
+			float rho3d_o = (s_o.x * s_o.x + s_o.y * s_o.y);
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
 			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
-			float rho = min(rho3d, rho2d);
+			float rho;
+			if (rho2d < rho3d_o){
+				rho = rho2d;
+			}else{
+				rho = rho3d;
+			}
 
 			// compute depth
-			float c_d = (s.x * Tw.x + s.y * Tw.y) + Tw.z; // Tw * [u,v,1]
+			float c_d = (s_o.x * Tw.x + s_o.y * Tw.y) + Tw.z; // Tw * [u,v,1]
 			// if a point is too small, its depth is not reliable?
 			// c_d = (rho3d <= rho2d) ? c_d : Tw.z; 
 			if (c_d < near_n) continue;
@@ -412,7 +419,7 @@ renderCUDA(
 			dL_dz += alpha * T * dL_ddepth; 
 #endif
 
-			if (rho3d <= rho2d) {
+			if (rho3d_o <= rho2d) {
 				const float dL_drho3d = dL_dG * (-0.5f * G);
 				float2 dL_ds = {
 					0.0f, 0.0f
@@ -423,6 +430,7 @@ renderCUDA(
 					float dx_dsx = coeffs_backward_atomic(s_o.x, RESCALE_FACTOR, collected_pchip_coeffs[j],
 														dL_dx, dL_dinter_points, base_idx);
 					dL_ds.x = dL_dG * (-G) * s.x * dx_dsx + dL_dz * Tw.x;
+					// dL_ds.x = dL_dG * (-G) * s.x + dL_dz * Tw.x;
 					dL_ds.y = dL_dG * (-G) * s.y + dL_dz * Tw.y;
 					
 				} else if constexpr (CONTROL_POINTS == 2) {
@@ -447,7 +455,7 @@ renderCUDA(
 				const float3 dz_dTw = {s.x, s.y, 1.0};
 				const float dsx_pz = dL_ds.x / p.z;
 				const float dsy_pz = dL_ds.y / p.z;
-				const float3 dL_dp = {dsx_pz, dsy_pz, -(dsx_pz * s.x + dsy_pz * s.y)};
+				const float3 dL_dp = {dsx_pz, dsy_pz, -(dsx_pz * s_o.x + dsy_pz * s_o.y)};
 				const float3 dL_dk = cross(l, dL_dp);
 				const float3 dL_dl = cross(dL_dp, k);
 
