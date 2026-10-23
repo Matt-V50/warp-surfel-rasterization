@@ -52,8 +52,11 @@ namespace CudaRasterizer
 			float* out_color,
 			float* out_others,
 			int* radii = nullptr,
+			int* original_radii = nullptr,
 			bool debug = false,
-			const float T_limit = -1.0f);
+			const float T_limit = -1.0f,
+			const float rescale = 3.0f,
+			const float cutoff = 3.0f);
 
 		static void backward(
 			const int P, int D, int M, int R,
@@ -86,7 +89,8 @@ namespace CudaRasterizer
 			float* dL_dscale,
 			float* dL_drot,
 			float* dL_dinter_points,
-			bool debug);
+			bool debug,
+			const float rescale = 3.0f);
 	};
 };
 

@@ -40,6 +40,7 @@ namespace FORWARD
 		const float focal_x, float focal_y,
 		const float tan_fovx, float tan_fovy,
 		int* radii,
+		int* original_radii,
 		Coeffs* pchip_coeffs,
 		float2* points_xy_image,
 		float* depths,
@@ -50,7 +51,8 @@ namespace FORWARD
 		float4* normal_opacity,
 		const dim3 grid,
 		uint32_t* tiles_touched,
-		bool prefiltered);
+		bool prefiltered,
+		const float cutoff);
 
 	// Main rasterization method.
 	void render(
@@ -70,7 +72,8 @@ namespace FORWARD
 		const float* bg_color,
 		float* out_color,
 		float* out_others,
-		const float T_limit);
+		const float T_limit,
+		const float rescale);
 }
 
 

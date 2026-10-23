@@ -220,8 +220,11 @@ int CudaRasterizer::Rasterizer::forward(
 	float* out_color,
 	float* out_others,
 	int* radii,
+	int* original_radii,
 	bool debug,
-	const float T_limit)
+	const float T_limit,
+	const float rescale,
+	const float cutoff)
 {
 	const float focal_y = height / (2.0f * tan_fovy);
 	const float focal_x = width / (2.0f * tan_fovx);
@@ -267,6 +270,7 @@ int CudaRasterizer::Rasterizer::forward(
 		focal_x, focal_y,
 		tan_fovx, tan_fovy,
 		radii,
+		original_radii,
 		geomState.pchip_coeffs,
 		geomState.means2D,
 		geomState.depths,
@@ -275,7 +279,8 @@ int CudaRasterizer::Rasterizer::forward(
 		geomState.normal_opacity,
 		tile_grid,
 		geomState.tiles_touched,
-		prefiltered
+		prefiltered,
+		cutoff
 	), debug)
 
 	// Compute prefix sum over full list of touched tile counts by Gaussians
@@ -343,7 +348,8 @@ int CudaRasterizer::Rasterizer::forward(
 		background,
 		out_color,
 		out_others,
-		T_limit), debug)
+		T_limit,
+		rescale), debug)
 
 	return num_rendered;
 }
@@ -381,7 +387,8 @@ void CudaRasterizer::Rasterizer::backward(
 	float* dL_dscale,
 	float* dL_drot,
 	float* dL_dinter_points,
-	bool debug)
+	bool debug,
+	const float rescale)
 {
 	GeometryState geomState = GeometryState::fromChunk(geom_buffer, P);
 	BinningState binningState = BinningState::fromChunk(binning_buffer, R);
@@ -427,7 +434,8 @@ void CudaRasterizer::Rasterizer::backward(
 		dL_dnormal,
 		dL_dopacity,
 		dL_dcolor,
-		dL_dinter_points
+		dL_dinter_points,
+		rescale
 	), debug)
 
 	// Take care of the rest of preprocessing. Was the precomputed covariance

@@ -165,6 +165,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	const float tan_fovx, const float tan_fovy,
 	const float focal_x, const float focal_y,
 	int* radii,
+	int* original_radii,
 	Coeffs* pchip_coeffs,
 	float2* points_xy_image,
 	float* depths,
@@ -173,7 +174,8 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float4* normal_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
-	bool prefiltered)
+	bool prefiltered,
+	const float cutoff)
 {
 	auto idx = cg::this_grid().thread_rank();
 	if (idx >= P)
@@ -220,17 +222,26 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	// the effective extent is now depended on the opacity of gaussian.
 	float cutoff = sqrtf(max(9.f + 2.f * logf(opacities[idx]), 0.000001));
 #else
-	float cutoff = 3.0f;
+	// cutoff (runtime) bounds the warped footprint; original_cutoff keeps the
+	// unwarped 3-sigma radius used for densification statistics.
+	const float original_cutoff = 3.0f;
 #endif
 
 	// Compute center and radius
 	float2 point_image;
 	float radius;
+	float original_radius;
 	{
 		float2 extent;
 		bool ok = compute_aabb(T, cutoff, point_image, extent);
 		if (!ok) return;
 		radius = ceil(max(max(extent.x, extent.y), cutoff * FilterSize));
+	}
+	{
+		float2 extent;
+		float2 temp_center;
+		bool ok = compute_aabb(T, original_cutoff, temp_center, extent);
+		original_radius = ceil(max(max(extent.x, extent.y), original_cutoff * FilterSize));
 	}
 
 	uint2 rect_min, rect_max;
@@ -248,6 +259,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 
 	depths[idx] = p_view.z;
 	radii[idx] = (int)radius;
+	original_radii[idx] = (int)original_radius;
 	points_xy_image[idx] = point_image;
 	for(int i = 0; i < CONTROL_POINTS; i++) {
 		int base = (idx * CONTROL_POINTS + i) * DOF;
@@ -278,7 +290,8 @@ renderCUDA(
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
 	float* __restrict__ out_others,
-	const float T_limit)
+	const float T_limit,
+	const float rescale)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -378,13 +391,13 @@ renderCUDA(
 			
 			if constexpr (CONTROL_POINTS == 1) {
 				// if (abs(s.x) > 3.0f) continue;
-				float x = coeffs_eval(s.x / RESCALE_FACTOR, collected_coeffs[j]);
-				s = {x * RESCALE_FACTOR, s.y};
+				float x = coeffs_eval(s.x / rescale, collected_coeffs[j]);
+				s = {x * rescale, s.y};
 			} else if constexpr (CONTROL_POINTS == 2) {
 				// if (abs(s.x) > 3.0f || abs(s.y) > 3.0f) continue;
-				float x = coeffs_eval(s.x / RESCALE_FACTOR, collected_coeffs[j * CONTROL_POINTS]);
-				float y = coeffs_eval(s.y / RESCALE_FACTOR, collected_coeffs[j * CONTROL_POINTS + 1]);
-				s = {x * RESCALE_FACTOR, y * RESCALE_FACTOR};
+				float x = coeffs_eval(s.x / rescale, collected_coeffs[j * CONTROL_POINTS]);
+				float y = coeffs_eval(s.y / rescale, collected_coeffs[j * CONTROL_POINTS + 1]);
+				s = {x * rescale, y * rescale};
 			}
 			
 			float rho3d = (s.x * s.x + s.y * s.y);
@@ -510,7 +523,8 @@ void FORWARD::render(
 	const float* bg_color,
 	float* out_color,
 	float* out_others,
-	const float T_limit)
+	const float T_limit,
+	const float rescale)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -528,7 +542,8 @@ void FORWARD::render(
 		bg_color,
 		out_color,
 		out_others,
-		T_limit);
+		T_limit,
+		rescale);
 }
 
 void FORWARD::preprocess(int P, int D, int M,
@@ -549,6 +564,7 @@ void FORWARD::preprocess(int P, int D, int M,
 	const float focal_x, const float focal_y,
 	const float tan_fovx, const float tan_fovy,
 	int* radii,
+	int* original_radii,
 	Coeffs* pchip_coeffs,
 	float2* means2D,
 	float* depths,
@@ -557,7 +573,8 @@ void FORWARD::preprocess(int P, int D, int M,
 	float4* normal_opacity,
 	const dim3 grid,
 	uint32_t* tiles_touched,
-	bool prefiltered)
+	bool prefiltered,
+	const float cutoff)
 {
 	preprocessCUDA<NUM_CHANNELS> << <(P + 255) / 256, 256 >> > (
 		P, D, M,
@@ -578,6 +595,7 @@ void FORWARD::preprocess(int P, int D, int M,
 		tan_fovx, tan_fovy,
 		focal_x, focal_y,
 		radii,
+		original_radii,
 		pchip_coeffs,
 		means2D,
 		depths,
@@ -586,6 +604,7 @@ void FORWARD::preprocess(int P, int D, int M,
 		normal_opacity,
 		grid,
 		tiles_touched,
-		prefiltered
+		prefiltered,
+		cutoff
 		);
 }

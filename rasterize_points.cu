@@ -37,7 +37,7 @@ std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
 	return lambda;
 }
 
-std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
+std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& inter_points, // inter_points,  # N x C x 2
 	const torch::Tensor& background,
@@ -59,7 +59,9 @@ RasterizeGaussiansCUDA(
 	const torch::Tensor& campos,
 	const bool prefiltered,
 	const bool debug,
-	const float T_limit)
+	const float T_limit,
+	const float rescale,
+	const float cutoff)
 {
   if (means3D.ndimension() != 2 || means3D.size(1) != 3) {
 	AT_ERROR("means3D must have dimensions (num_points, 3)");
@@ -71,6 +73,8 @@ RasterizeGaussiansCUDA(
   const int W = image_width;
 
   CHECK_INPUT(inter_points);
+  TORCH_CHECK(P == 0 || (inter_points.dim() == 3 && inter_points.size(1) == CONTROL_POINTS && inter_points.size(2) == DOF),
+	"inter_points must have shape (P, ", CONTROL_POINTS, ", ", DOF, ") for warp kernel " WARP_STR(WARP_KERNEL) ", got ", inter_points.sizes());
   CHECK_INPUT(background);
   CHECK_INPUT(means3D);
   CHECK_INPUT(colors);
@@ -89,6 +93,7 @@ RasterizeGaussiansCUDA(
   torch::Tensor out_color = torch::full({NUM_CHANNELS, H, W}, 0.0, float_opts);
   torch::Tensor out_others = torch::full({3+3+1, H, W}, 0.0, float_opts);
   torch::Tensor radii = torch::full({P}, 0, means3D.options().dtype(torch::kInt32));
+  torch::Tensor original_radii = torch::full({P}, 0, means3D.options().dtype(torch::kInt32));
   
   torch::Device device(torch::kCUDA);
   torch::TensorOptions options(torch::kByte);
@@ -133,10 +138,13 @@ RasterizeGaussiansCUDA(
 		out_color.contiguous().data<float>(),
 		out_others.contiguous().data<float>(),
 		radii.contiguous().data<int>(),
+		original_radii.contiguous().data<int>(),
 		debug,
-		T_limit);
+		T_limit,
+		rescale,
+		cutoff);
   }
-  return std::make_tuple(rendered, out_color, out_others, radii, geomBuffer, binningBuffer, imgBuffer);
+  return std::make_tuple(rendered, out_color, out_others, radii, original_radii, geomBuffer, binningBuffer, imgBuffer);
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
@@ -162,7 +170,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	const int R,
 	const torch::Tensor& binningBuffer,
 	const torch::Tensor& imageBuffer,
-	const bool debug) 
+	const bool debug,
+	const float rescale) 
 {
   CHECK_INPUT(background);
   CHECK_INPUT(means3D);
@@ -233,7 +242,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Te
 	  dL_dscales.contiguous().data<float>(),
 	  dL_drotations.contiguous().data<float>(),
 	  dL_dinter_points.contiguous().data<float>(),
-	  debug);
+	  debug,
+	  rescale);
   }
 
   return std::make_tuple(dL_dinter_points, dL_dmeans2D, dL_dcolors, dL_dopacity, dL_dmeans3D, dL_dtransMat, dL_dsh, dL_dscales, dL_drotations);

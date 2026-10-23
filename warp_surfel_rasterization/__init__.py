@@ -9,10 +9,31 @@
 # For inquiries contact  george.drettakis@inria.fr
 #
 
+import importlib
+import math
+from functools import lru_cache
 from typing import NamedTuple
 import torch.nn as nn
 import torch
-from . import _C
+from .kernels import KERNELS, CONTROL_POINTS
+
+@lru_cache(maxsize=None)
+def get_backend(kernel):
+    """Return the compiled extension module for a warp kernel, e.g. "pwl_sr" -> _C_pwl_sr."""
+    if kernel not in KERNELS:
+        raise ValueError(f"Unknown warp kernel '{kernel}', available: {list(KERNELS)}")
+    try:
+        return importlib.import_module(f"._C_{kernel}", __name__)
+    except ImportError as ex:
+        raise ImportError(
+            f"Warp kernel '{kernel}' is not built. Reinstall with it included, e.g. "
+            f"WARP_KERNELS={kernel} pip install ./submodules/warp-surfel-rasterization") from ex
+
+def resolve_cutoff(raster_settings):
+    # Default cutoff keeps the 3-sigma support after warping: rescale * sqrt(2).
+    if raster_settings.cutoff > 0:
+        return raster_settings.cutoff
+    return 3.0 if raster_settings.kernel == "identity" else raster_settings.rescale * math.sqrt(2.0)
 
 def cpu_deep_copy_tuple(input_tuple):
     copied_tensors = [item.cpu().clone() if isinstance(item, torch.Tensor) else item for item in input_tuple]
@@ -81,29 +102,32 @@ class _RasterizeGaussians(torch.autograd.Function):
             raster_settings.campos,
             raster_settings.prefiltered,
             raster_settings.debug,
-            raster_settings.T_limit
+            raster_settings.T_limit,
+            raster_settings.rescale,
+            resolve_cutoff(raster_settings),
         )
+        _C = get_backend(raster_settings.kernel)
 
         # Invoke C++/CUDA rasterizer
         if raster_settings.debug:
             cpu_args = cpu_deep_copy_tuple(args) # Copy them before they can be corrupted
             try:
-                num_rendered, color, depth, radii, geomBuffer, binningBuffer, imgBuffer = _C.rasterize_gaussians(*args)
+                num_rendered, color, depth, radii, original_radii, geomBuffer, binningBuffer, imgBuffer = _C.rasterize_gaussians(*args)
             except Exception as ex:
                 torch.save(cpu_args, "snapshot_fw.dump")
                 print("\nAn error occured in forward. Please forward snapshot_fw.dump for debugging.")
                 raise ex
         else:
-            num_rendered, color, depth, radii, geomBuffer, binningBuffer, imgBuffer = _C.rasterize_gaussians(*args)
+            num_rendered, color, depth, radii, original_radii, geomBuffer, binningBuffer, imgBuffer = _C.rasterize_gaussians(*args)
 
         # Keep relevant tensors for backward
         ctx.raster_settings = raster_settings
         ctx.num_rendered = num_rendered
         ctx.save_for_backward(colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, geomBuffer, binningBuffer, imgBuffer)
-        return color, radii, depth
+        return color, radii, original_radii, depth
 
     @staticmethod
-    def backward(ctx, grad_out_color, grad_radii, grad_depth):
+    def backward(ctx, grad_out_color, grad_radii, grad_original_radii, grad_depth):
 
         # Restore necessary values from context
         num_rendered = ctx.num_rendered
@@ -133,7 +157,9 @@ class _RasterizeGaussians(torch.autograd.Function):
                 num_rendered,
                 binningBuffer,
                 imgBuffer,
-                raster_settings.debug)
+                raster_settings.debug,
+                raster_settings.rescale)
+        _C = get_backend(raster_settings.kernel)
 
         # Compute gradients for relevant tensors by invoking backward method
         if raster_settings.debug:
@@ -178,6 +204,9 @@ class GaussianRasterizationSettings(NamedTuple):
     prefiltered : bool
     debug : bool
     T_limit : float = -1.0
+    kernel : str = "pwl_sr"   # warp kernel, see kernels.py
+    rescale : float = 3.0     # warp domain [-rescale, rescale] in splat space
+    cutoff : float = -1.0     # footprint cutoff, <= 0 means auto (rescale * sqrt(2))
 
 class GaussianRasterizer(nn.Module):
     def __init__(self, raster_settings):
@@ -188,7 +217,7 @@ class GaussianRasterizer(nn.Module):
         # Mark visible points (based on frustum culling for camera) with a boolean 
         with torch.no_grad():
             raster_settings = self.raster_settings
-            visible = _C.mark_visible(
+            visible = get_backend(raster_settings.kernel).mark_visible(
                 positions,
                 raster_settings.viewmatrix,
                 raster_settings.projmatrix)

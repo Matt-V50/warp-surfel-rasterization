@@ -1,5 +1,24 @@
-#define CONTROL_POINTS 2 // Default 1
-#define RESCALE_FACTOR 3.0f // Default 3.0f
-#define DOF 4  // Degrees of freedom: Pchip(2), SmoothSigmoid(1), Pwl3(2), Pwl4(4), Pwl4Accumulate(6), Pwl5Symmetric(2), Pwl_abs(1), Pwl5Asymmetric(4), Pwl4Phase(4), Pchip3_single_t(1)
+#pragma once
 
-#include "pwl4_clamp.h"
+// Warp kernel selection. Each kernel is compiled into its own extension module
+// (see setup.py), which passes these macros on the command line:
+//   WARP_KERNEL     name of the header in cuda_rasterizer/kernels/ (without .h)
+//   DOF             learnable parameters per control point
+//   CONTROL_POINTS  warped axes per Gaussian (2 = warp both s.x and s.y)
+// RESCALE_FACTOR and cutoff are runtime arguments (GaussianRasterizationSettings).
+
+#ifndef WARP_KERNEL
+#define WARP_KERNEL pwl_sr
+#endif
+
+#ifndef DOF
+#define DOF 2
+#endif
+
+#ifndef CONTROL_POINTS
+#define CONTROL_POINTS 2
+#endif
+
+#define WARP_STR_(x) #x
+#define WARP_STR(x) WARP_STR_(x)
+#include WARP_STR(kernels/WARP_KERNEL.h)

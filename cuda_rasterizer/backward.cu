@@ -163,7 +163,8 @@ renderCUDA(
 	float* __restrict__ dL_dnormal3D,
 	float* __restrict__ dL_dopacity,
 	float* __restrict__ dL_dcolors,
-	float* __restrict__ dL_dinter_points)
+	float* __restrict__ dL_dinter_points,
+	const float rescale)
 {
 	// We rasterize again. Compute necessary block info.
 	auto block = cg::this_thread_block();
@@ -300,12 +301,12 @@ renderCUDA(
 			float2 s_o = {p.x / p.z, p.y / p.z};
 			float2 s = {p.x / p.z, p.y / p.z};
 			if constexpr (CONTROL_POINTS == 1) {
-				float x = coeffs_eval(s.x / RESCALE_FACTOR, collected_pchip_coeffs[j * CONTROL_POINTS]);
-				s = {x * RESCALE_FACTOR, s.y};
+				float x = coeffs_eval(s.x / rescale, collected_pchip_coeffs[j * CONTROL_POINTS]);
+				s = {x * rescale, s.y};
 			} else if constexpr (CONTROL_POINTS == 2) {
-				float x = coeffs_eval(s.x / RESCALE_FACTOR, collected_pchip_coeffs[j * CONTROL_POINTS]);
-				float y = coeffs_eval(s.y / RESCALE_FACTOR, collected_pchip_coeffs[j * CONTROL_POINTS + 1]);
-				s = {x * RESCALE_FACTOR, y * RESCALE_FACTOR};
+				float x = coeffs_eval(s.x / rescale, collected_pchip_coeffs[j * CONTROL_POINTS]);
+				float y = coeffs_eval(s.y / rescale, collected_pchip_coeffs[j * CONTROL_POINTS + 1]);
+				s = {x * rescale, y * rescale};
 			}
 			float rho3d = (s.x * s.x + s.y * s.y); 
 			float rho3d_o = (s_o.x * s_o.x + s_o.y * s_o.y);
@@ -427,7 +428,7 @@ renderCUDA(
 				if constexpr (CONTROL_POINTS == 1) {
 					float dL_dx = dL_dG * (-G) * s.x;  // dL/dx
 					const int base_idx = global_id * DOF * CONTROL_POINTS;
-					float dx_dsx = coeffs_backward_atomic(s_o.x, RESCALE_FACTOR, collected_pchip_coeffs[j],
+					float dx_dsx = coeffs_backward_atomic(s_o.x, rescale, collected_pchip_coeffs[j],
 														dL_dx, dL_dinter_points, base_idx);
 					dL_ds.x = dL_dG * (-G) * s.x * dx_dsx + dL_dz * Tw.x;
 					// dL_ds.x = dL_dG * (-G) * s.x + dL_dz * Tw.x;
@@ -437,9 +438,9 @@ renderCUDA(
 					float dL_dx = dL_dG * (-G) * s.x;
 					float dL_dy = dL_dG * (-G) * s.y;
 					const int base_idx = global_id * DOF * CONTROL_POINTS;
-					float dx_dsx = coeffs_backward_atomic(s_o.x, RESCALE_FACTOR, collected_pchip_coeffs[j * CONTROL_POINTS],
+					float dx_dsx = coeffs_backward_atomic(s_o.x, rescale, collected_pchip_coeffs[j * CONTROL_POINTS],
 														dL_dx, dL_dinter_points, base_idx);
-					float dy_dsy = coeffs_backward_atomic(s_o.y, RESCALE_FACTOR, collected_pchip_coeffs[j * CONTROL_POINTS + 1],
+					float dy_dsy = coeffs_backward_atomic(s_o.y, rescale, collected_pchip_coeffs[j * CONTROL_POINTS + 1],
 														dL_dy, dL_dinter_points, base_idx + DOF);
 					dL_ds.x = dL_dG * (-G) * s.x * dx_dsx + dL_dz * Tw.x;
 					dL_ds.y = dL_dG * (-G) * s.y * dy_dsy + dL_dz * Tw.y;					
@@ -760,7 +761,8 @@ void BACKWARD::render(
 	float* dL_dnormal3D,
 	float* dL_dopacity,
 	float* dL_dcolors,
-	float* dL_dinter_points)
+	float* dL_dinter_points,
+	const float rescale)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
 		ranges,
@@ -783,6 +785,7 @@ void BACKWARD::render(
 		dL_dnormal3D,
 		dL_dopacity,
 		dL_dcolors,
-		dL_dinter_points
+		dL_dinter_points,
+		rescale
 		);
 }
